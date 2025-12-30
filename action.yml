@@ -1,93 +1,99 @@
 name: Deploy Docker Image via SSH and Docker Compose
-description: GitHub Action to deploy a Docker image to a remote server using SSH and Docker Compose.
-author: "Anil Raj Rimal" 
+description: Deploy a Docker image to a remote server using SSH and Docker Compose.
+author: "Anil Raj Rimal"
 
 inputs:
   SSH_PRIVATE_KEY:
     required: true
     description: "The SSH private key to connect to the deployment server."
-  AWS_ACCESS_KEY_ID:
+
+  AWS_ROLE_ARN:
     required: true
-    description: "AWS access key for configuring AWS credentials."
-  AWS_SECRET_ACCESS_KEY:
-    required: true
-    description: "AWS secret key for configuring AWS credentials."
+    description: "IAM Role ARN to assume via GitHub OIDC."
+
   AWS_REGION:
     required: true
-    description: "AWS region for configuring AWS credentials."
-  ECR_REGISTRY:
-    required: true
-    description: "Amazon ECR registry URL."
+    description: "AWS region."
+
   ECR_REPOSITORY:
     required: true
     description: "Amazon ECR repository name."
+
   DEPLOYMENT_SERVER_IP:
     required: true
     description: "The IP address of the deployment server."
+
   DEPLOYMENT_SERVER_USERNAME:
     required: true
-    default: 'ubuntu'
+    default: "ubuntu"
     description: "The SSH username for the deployment server."
+
   PHASE_SERVICE_TOKEN:
     required: true
     description: "Phase Token for Service Account"
+
   PHASE_APP_ID:
     required: true
     description: "The Unique Identifier for the Projects in Phase"
+
   BRANCH_NAME:
     required: true
     description: "Branch executing workflow"
+
   PHASE_HOST:
     required: false
     description: "Only required for self-hosted one"
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+  - name: Checkout Repository
+    uses: actions/checkout@v5
 
-    - name: Configure SSH Key
-      shell: bash
-      run: |
-        mkdir -p ~/.ssh
-        touch ~/.ssh/id_rsa
-        chmod 666 ~/.ssh/id_rsa
-        echo "${{ inputs.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-        chmod 400 ~/.ssh/id_rsa
-        ssh-keyscan ${{ inputs.DEPLOYMENT_SERVER_IP }} >> ~/.ssh/known_hosts
+  - name: Configure SSH Key
+    uses: webfactory/ssh-agent@v0.9.0
+    with:
+      ssh-private-key: ${{ inputs.SSH_PRIVATE_KEY }}
 
-    - name: Configure AWS Credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ inputs.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ inputs.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ inputs.AWS_REGION }}
+  - name: Add SSH Known Hosts
+    shell: bash
+    run: |
+      ssh-keyscan -H ${{ inputs.DEPLOYMENT_SERVER_IP }} >> ~/.ssh/known_hosts
 
-    - name: Login to Amazon ECR
-      uses: aws-actions/amazon-ecr-login@v2
-    
-    - name: Generate env from Phase
-      uses: anilrajrimal1/phase-secrets-fetch-action@v1.0.5
-      with:
-        phase_service_token: ${{ inputs.PHASE_SERVICE_TOKEN }}
-        phase_app_id: ${{ inputs.PHASE_APP_ID }}
-        phase_env: ${{ inputs.BRANCH_NAME }}
-        phase_host: ${{ inputs.PHASE_HOST }}
+  - name: Configure AWS Credentials (OIDC)
+    uses: aws-actions/configure-aws-credentials@v5
+    with:
+      role-to-assume: ${{ inputs.AWS_ROLE_ARN }}
+      aws-region: ${{ inputs.AWS_REGION }}
 
-    - name: Copy Docker Compose File
-      shell: bash
-      run: |
-        cp ./docker/server/docker-compose.${{ inputs.BRANCH_NAME }}.yml docker-compose.yml
+  - name: Login to Amazon ECR
+    id: login-ecr
+    uses: aws-actions/amazon-ecr-login@v2
 
-    - name: Pull and Deploy Docker Image to Server
-      shell: bash
-      run: |
-        docker compose --file docker-compose.yml pull
-        docker compose --file docker-compose.yml up --detach
-      env:
-        DOCKER_HOST: ssh://${{ inputs.DEPLOYMENT_SERVER_USERNAME }}@${{ inputs.DEPLOYMENT_SERVER_IP }}
+  - name: Generate env from Phase
+    uses: anilrajrimal1/phase-secrets-fetch-action@v1.0.5
+    with:
+      phase_service_token: ${{ inputs.PHASE_SERVICE_TOKEN }}
+      phase_app_id: ${{ inputs.PHASE_APP_ID }}
+      phase_env: ${{ inputs.BRANCH_NAME }}
+      phase_host: ${{ inputs.PHASE_HOST }}
+
+  - name: Copy Docker Compose File
+    shell: bash
+    run: |
+      cp "./docker/server/docker-compose.${{ inputs.BRANCH_NAME }}.yml" docker-compose.yml
+
+  - name: Login to Amazon ECR
+    uses: aws-actions/amazon-ecr-login@v2
+
+  - name: Pull and Deploy Docker Image to Server
+    shell: bash
+    env:
+      DOCKER_HOST: ssh://${{ inputs.DEPLOYMENT_SERVER_USERNAME }}@${{ inputs.DEPLOYMENT_SERVER_IP }}
+    run: |
+      docker compose --file docker-compose.yml pull
+      docker compose --file docker-compose.yml up --detach
 
 branding:
-  icon: 'server'
-  color: 'purple'
+  icon: "server"
+  color: "purple"
